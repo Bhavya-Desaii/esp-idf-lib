@@ -1,0 +1,21 @@
+menu "Example configuration"
+
+    choice EXAMPLE_I2C_ADDRESS
+        prompt "Select I2C address"
+        default EXAMPLE_I2C_ADDRESS_0
+        help
+            Select I2C address.
+
+        config EXAMPLE_I2C_ADDRESS_0
+            bool "AS7331_I2C_ADDR_0 (0x74)"
+        config EXAMPLE_I2C_ADDRESS_1
+            bool "AS7331_I2C_ADDR_1 (0x75)"
+        config EXAMPLE_I2C_ADDRESS_2
+            bool "AS7331_I2C_ADDR_2 (0x76)"
+        config EXAMPLE_I2C_ADDRESS_3
+            bool "AS7331_I2C_ADDR_3 (0x77)"
+    endchoice
+    
+    rsource "../../../../devtools/Kconfig.i2c"
+
+endmenu

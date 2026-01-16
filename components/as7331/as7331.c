@@ -151,7 +151,7 @@ static esp_err_t write_register_bits(as7331_t *dev, uint8_t reg, uint8_t mask, u
 ////////// Registers read/write functions //////////
 
 // Set the device operating state (configuration or measurement mode)
-static esp_err_t as7331_set_device_state(as7331_t *dev, uint8_t value) {
+static esp_err_t as7331_set_device_state_internal(as7331_t *dev, uint8_t value) {
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_OSR, OSR_MASK_DOS, value, 0));
     return ESP_OK;
 }
@@ -226,17 +226,17 @@ static esp_err_t as7331_get_mres3(as7331_t *dev, uint16_t *value) {
 // Enable or disable measurement of the integration time
 // Enables(1) or disables(0)
 static esp_err_t as7331_set_time_measurement_enabled(as7331_t *dev, uint8_t value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG2, CREG2_MASK_EN_TM, value, 2));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     return ESP_OK;
 }
 
 // Read the integration time measurement enable state
 static esp_err_t as7331_get_time_measurement_enabled(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg2(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     *value = *value & CREG2_MASK_EN_TM;
     return ESP_OK;
 }
@@ -386,7 +386,7 @@ static float as7331_get_uvc_raw(as7331_t *dev) {
 }
 
 // Perform a measurement and read all raw UV channels and temperature values
-static esp_err_t as7331_get_uv_raw(as7331_t *dev, as7331_raw_values_t *out) {
+static esp_err_t as7331_get_uv_raw_internal(as7331_t *dev, as7331_raw_values_t *out) {
     CHECK(as7331_start_measurement(dev));
 
     bool not_ready = true;
@@ -411,143 +411,174 @@ static esp_err_t as7331_get_uv_raw(as7331_t *dev, as7331_raw_values_t *out) {
     return ESP_OK;
 }
 
-////////// No Lock Functions //////////
+////////// No Lock Functions for public functions//////////
 
-esp_err_t as7331_software_reset(as7331_t *dev) {
+// Perform a software reset by setting the OSR reset bit (mutex must be held)
+static esp_err_t as7331_software_reset_nolock(as7331_t *dev) {
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_OSR, OSR_MASK_SW_RES, 1, 3));
     return ESP_OK;
 }
 
-esp_err_t as7331_get_chip_id(as7331_t * dev, uint8_t *value) {
+// Read the raw chip ID field from the AGEN register (mutex must be held)
+static esp_err_t as7331_get_chip_id_nolock(as7331_t * dev, uint8_t *value) {
     I2C_DEV_CHECK(&dev->i2c_dev, read_register(dev, REG_ADDR_AGEN, value));
     return ESP_OK;
 }
 
-esp_err_t as7331_set_measurement_mode(as7331_t *dev, uint8_t value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Set the measurement mode in CREG3, handling config/measurement state transitions (mutex must be held)
+static esp_err_t as7331_set_measurement_mode_nolock(as7331_t *dev, uint8_t value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG3, CREG3_MASK_MMODE, value, 6));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     dev->settings.measurement_mode = value;
     return ESP_OK;
 }
 
-esp_err_t as7331_get_measurement_mode(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Read the current measurement mode from CREG3 (mutex must be held)
+static esp_err_t as7331_get_measurement_mode_nolock(as7331_t *dev, uint8_t *value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg3(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     *value = *value & CREG3_MASK_MMODE;
     return ESP_OK;
 }
 
-esp_err_t as7331_set_integration_time(as7331_t *dev, uint8_t value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Configure the integration time in CREG1 and update cached settings (mutex must be held)
+static esp_err_t as7331_set_integration_time_nolock(as7331_t *dev, uint8_t value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG1, CREG1_MASK_INTEGRATION_TIME, value, 0));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     dev->settings.integration_time = value;
     return ESP_OK;
 }
 
-esp_err_t as7331_get_integration_time(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Read the integration time field from CREG1 (mutex must be held)
+static esp_err_t as7331_get_integration_time_nolock(as7331_t *dev, uint8_t *value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg1(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     *value = *value & CREG1_MASK_INTEGRATION_TIME;
     return ESP_OK;
 }
 
-esp_err_t as7331_set_gain(as7331_t *dev, uint8_t value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Configure the analog gain in CREG1 and update cached settings (mutex must be held)
+static esp_err_t as7331_set_gain_nolock(as7331_t *dev, uint8_t value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG1, CREG1_MASK_GAIN, value, GAIN_BIT_SHIFT));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     dev->settings.gain = value;
     return ESP_OK;
 }
 
-esp_err_t as7331_get_gain(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Read the current analog gain setting from CREG1 (mutex must be held)
+static esp_err_t as7331_get_gain_nolock(as7331_t *dev, uint8_t *value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg1(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     *value = (*value & CREG1_MASK_GAIN) >> GAIN_BIT_SHIFT;
     return ESP_OK;
 }
 
-esp_err_t as7331_set_standby_state(as7331_t *dev, bool value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Enable or disable standby mode via CREG3 and update cached settings (mutex must be held)
+static esp_err_t as7331_set_standby_state_nolock(as7331_t *dev, bool value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG3, CREG3_MASK_SB, value, 4));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     dev->settings.standby_state = value;
     return ESP_OK;
 }
 
-esp_err_t as7331_get_standby_state(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Read the standby mode bit from CREG3 (mutex must be held)
+static esp_err_t as7331_get_standby_state_nolock(as7331_t *dev, uint8_t *value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg3(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     *value = *value & CREG3_MASK_SB;
     return ESP_OK;
 }
 
-esp_err_t as7331_set_power_mode(as7331_t *dev, bool value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Enable or disable power-down mode via OSR and update cached settings (mutex must be held)
+static esp_err_t as7331_set_power_mode_nolock(as7331_t *dev, bool value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_OSR, OSR_MASK_PD, (uint8_t)value, 5));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     dev->settings.power_mode = value;
     return ESP_OK;
 }
 
-esp_err_t as7331_get_power_mode(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Read the power-down mode bit from OSR (mutex must be held)
+static esp_err_t as7331_get_power_mode_nolock(as7331_t *dev, uint8_t *value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_osr(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     *value = *value & OSR_MASK_PD;
     return ESP_OK;
 }
 
-esp_err_t as7331_set_divider_enabled(as7331_t *dev, bool value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Enable or disable the measurement result divider via CREG2 (mutex must be held)
+static esp_err_t as7331_set_divider_enabled_nolock(as7331_t *dev, bool value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG2, CREG2_MASK_EN_DIV, value, 3));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     dev->settings.divider_enable = value;
     return ESP_OK;
 }
 
-esp_err_t as7331_get_divider_enabled(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Read the divider enable bit from CREG2 (mutex must be held)
+static esp_err_t as7331_get_divider_enabled_nolock(as7331_t *dev, uint8_t *value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg2(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     *value = *value & CREG2_MASK_EN_DIV;
     return ESP_OK;
 }
 
-esp_err_t as7331_set_divider_nolock(as7331_t *dev, uint8_t value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+
+// Configure the measurement result divider value in CREG2 and update cached settings (mutex must be held)
+static esp_err_t as7331_set_divider_nolock(as7331_t *dev, uint8_t value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG2, CREG2_MASK_DIV, value, 0));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     dev->settings.divider = value;
     return ESP_OK;
 }
 
-esp_err_t as7331_get_divider_nolock(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Read the measurement result divider value from CREG2 (mutex must be held)
+static esp_err_t as7331_get_divider_nolock(as7331_t *dev, uint8_t *value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg2(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     *value = *value & CREG2_MASK_DIV;
     return ESP_OK;
 }
 
-esp_err_t as7331_set_cclk_nolock(as7331_t *dev, uint8_t value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Configure the internal clock frequency in CREG3 and update cached settings (mutex must be held)
+static esp_err_t as7331_set_cclk_nolock(as7331_t *dev, uint8_t value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG3, CREG3_MASK_CCLK, value, 0));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     dev->settings.cclk = value;
     return ESP_OK;
 }
 
-esp_err_t as7331_get_cclk_nolock(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+// Read the internal clock frequency field from CREG3 (mutex must be held)
+static esp_err_t as7331_get_cclk_nolock(as7331_t *dev, uint8_t *value) {
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg3(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
     *value = *value & CREG3_MASK_CCLK;
+    return ESP_OK;
+}
+
+// Apply the driver’s default configuration sequence without taking the mutex
+esp_err_t as7331_set_default_config_nolock(as7331_t *dev) {
+    CHECK(as7331_set_measurement_mode_nolock(dev, MEASUREMENT_MODE_COMMAND));
+    CHECK(as7331_set_integration_time_nolock(dev, INTEGRATION_TIME_256MS));
+    CHECK(as7331_set_gain_nolock(dev, GAIN_16X));
+    CHECK(as7331_set_standby_state_nolock(dev, false));
+    CHECK(as7331_set_power_mode_nolock(dev, false));
+    CHECK(as7331_set_divider_enabled_nolock(dev, false));
+    CHECK(as7331_set_cclk_nolock(dev, CCLK_FREQ_1024KHZ));
     return ESP_OK;
 }
 
@@ -582,139 +613,175 @@ esp_err_t as7331_free_desc(as7331_t *dev)
 }
 
 esp_err_t as7331_software_reset(as7331_t *dev) {
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_OSR, OSR_MASK_SW_RES, 1, 3));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     return ESP_OK;
 }
 
 esp_err_t as7331_get_chip_id(as7331_t * dev, uint8_t *value) {
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
     I2C_DEV_CHECK(&dev->i2c_dev, read_register(dev, REG_ADDR_AGEN, value));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     return ESP_OK;
 }
 
 esp_err_t as7331_set_measurement_mode(as7331_t *dev, uint8_t value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG3, CREG3_MASK_MMODE, value, 6));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     dev->settings.measurement_mode = value;
     return ESP_OK;
 }
 
 esp_err_t as7331_get_measurement_mode(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg3(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     *value = *value & CREG3_MASK_MMODE;
     return ESP_OK;
 }
 
 esp_err_t as7331_set_integration_time(as7331_t *dev, uint8_t value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG1, CREG1_MASK_INTEGRATION_TIME, value, 0));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     dev->settings.integration_time = value;
     return ESP_OK;
 }
 
 esp_err_t as7331_get_integration_time(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg1(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     *value = *value & CREG1_MASK_INTEGRATION_TIME;
     return ESP_OK;
 }
 
 esp_err_t as7331_set_gain(as7331_t *dev, uint8_t value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG1, CREG1_MASK_GAIN, value, GAIN_BIT_SHIFT));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     dev->settings.gain = value;
     return ESP_OK;
 }
 
 esp_err_t as7331_get_gain(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg1(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     *value = (*value & CREG1_MASK_GAIN) >> GAIN_BIT_SHIFT;
     return ESP_OK;
 }
 
 esp_err_t as7331_set_standby_state(as7331_t *dev, bool value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG3, CREG3_MASK_SB, value, 4));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     dev->settings.standby_state = value;
     return ESP_OK;
 }
 
 esp_err_t as7331_get_standby_state(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg3(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     *value = *value & CREG3_MASK_SB;
     return ESP_OK;
 }
 
 esp_err_t as7331_set_power_mode(as7331_t *dev, bool value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_OSR, OSR_MASK_PD, (uint8_t)value, 5));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     dev->settings.power_mode = value;
     return ESP_OK;
 }
 
 esp_err_t as7331_get_power_mode(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_osr(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     *value = *value & OSR_MASK_PD;
     return ESP_OK;
 }
 
 esp_err_t as7331_set_divider_enabled(as7331_t *dev, bool value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG2, CREG2_MASK_EN_DIV, value, 3));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     dev->settings.divider_enable = value;
     return ESP_OK;
 }
 
 esp_err_t as7331_get_divider_enabled(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg2(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     *value = *value & CREG2_MASK_EN_DIV;
     return ESP_OK;
 }
 
 esp_err_t as7331_set_divider(as7331_t *dev, uint8_t value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG2, CREG2_MASK_DIV, value, 0));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     dev->settings.divider = value;
     return ESP_OK;
 }
 
 esp_err_t as7331_get_divider(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg2(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     *value = *value & CREG2_MASK_DIV;
     return ESP_OK;
 }
 
 esp_err_t as7331_set_cclk(as7331_t *dev, uint8_t value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     I2C_DEV_CHECK(&dev->i2c_dev, write_register_bits(dev, REG_ADDR_CREG3, CREG3_MASK_CCLK, value, 0));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     dev->settings.cclk = value;
     return ESP_OK;
 }
 
 esp_err_t as7331_get_cclk(as7331_t *dev, uint8_t *value) {
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_CONFIGURATION));
+    I2C_DEV_TAKE_MUTEX(&dev->i2c_dev);
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_CONFIGURATION));
     CHECK(as7331_get_creg3(dev, value));
-    CHECK(as7331_set_device_state(dev, DEVICE_STATE_MEASUREMENT));
+    CHECK(as7331_set_device_state_internal(dev, DEVICE_STATE_MEASUREMENT));
+    I2C_DEV_GIVE_MUTEX(&dev->i2c_dev);
     *value = *value & CREG3_MASK_CCLK;
     return ESP_OK;
 }
@@ -754,7 +821,7 @@ esp_err_t as7331_init_sensor(as7331_t *dev)
     CHECK(as7331_get_chip_id_nolock(dev, &dev->chip_id));
     dev->chip_id = dev->chip_id >> AGEN_SHIFT_DEVID;
 
-    CHECK(as7331_set_default_config(dev));
+    CHECK(as7331_set_default_config_nolock(dev));
 
     CHECK(as7331_set_gain_nolock(dev, GAIN_512X));
     CHECK(as7331_set_integration_time_nolock(dev, INTEGRATION_TIME_128MS));
@@ -772,7 +839,7 @@ esp_err_t as7331_get_uv_values(as7331_t *dev, as7331_values_float_t *out) {
     float conv_factor_c = FSRC*common_factor;
 
     as7331_raw_values_t raw;
-    CHECK(as7331_get_uv_raw(dev, &raw));
+    CHECK(as7331_get_uv_raw_internal(dev, &raw));
     out->uv_a = (raw.uva_raw * conv_factor_a) / 100;
     out->uv_b = (raw.uvb_raw * conv_factor_b) / 100;
     out->uv_c = (raw.uvc_raw * conv_factor_c) / 100;
